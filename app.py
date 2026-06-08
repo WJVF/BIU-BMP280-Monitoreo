@@ -25,7 +25,6 @@ if not firebase_admin._apps:
         st.error("No se encontraron credenciales de Firebase (ni en Secrets ni el archivo JSON local).")
         st.stop()
 
-    # 2. Inicializar la base de datos (Pon tu URL real aquí)
     firebase_admin.initialize_app(cred, {
         'databaseURL': 'https://estacion-metereologica-d7c0d-default-rtdb.firebaseio.com' 
     })
@@ -42,15 +41,12 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;600;700&display=swap');
 
-    /* ── Fondo con imagen de cielo ── */
     .stApp {
         background-image: url('https://images.unsplash.com/photo-1501630834273-4b5604d2ee31?w=1920&q=80');
         background-size: cover;
         background-position: center;
         background-attachment: fixed;
     }
-
-    /* Capa semitransparente blanca sobre la imagen */
     .stApp::before {
         content: '';
         position: fixed;
@@ -58,16 +54,12 @@ st.markdown("""
         background: rgba(240, 247, 255, 0.82);
         z-index: 0;
     }
-
-    /* Todo el contenido encima de la capa */
     .stApp > * { position: relative; z-index: 1; }
 
     html, body, [class*="css"] {
         font-family: 'DM Sans', sans-serif;
         color: #1a2b4a;
     }
-
-    /* ── Tarjetas métricas ── */
     .metric-card {
         background: rgba(255, 255, 255, 0.88);
         border: 1px solid rgba(100, 160, 230, 0.35);
@@ -102,8 +94,6 @@ st.markdown("""
         color: #5a7a9e;
         font-family: 'Space Mono', monospace;
     }
-
-    /* ── Títulos de sección ── */
     .section-title {
         font-family: 'Space Mono', monospace;
         font-size: 0.82rem;
@@ -115,8 +105,6 @@ st.markdown("""
         margin: 28px 0 16px 0;
         font-weight: 700;
     }
-
-    /* ── Header ── */
     .header-bar {
         display: flex;
         justify-content: space-between;
@@ -125,7 +113,6 @@ st.markdown("""
         border-radius: 16px;
         background: linear-gradient(135deg, #0d2b5e 0%, #1455a4 60%, #1a6bbf 100%);
         border: 1px solid rgba(255,255,255,0.15);
-        
         box-shadow: 0 4px 20px rgba(13,43,94,0.45);
         margin-bottom: 24px;
     }
@@ -149,8 +136,6 @@ st.markdown("""
         text-align: right;
         line-height: 1.6;
     }
-
-    /* ── Punto de estado parpadeante ── */
     .status-dot {
         display: inline-block;
         width: 8px; height: 8px;
@@ -160,8 +145,6 @@ st.markdown("""
         animation: pulse 2s infinite;
     }
     @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.35;} }
-
-    /* ── Contenedor de gráficos ── */
     .chart-container {
         background: rgba(255,255,255,0.88);
         border-radius: 14px;
@@ -170,8 +153,6 @@ st.markdown("""
         backdrop-filter: blur(8px);
         box-shadow: 0 2px 12px rgba(30,90,180,0.08);
     }
-
-    /* ── Controles Streamlit ── */
     div[data-testid="stSelectbox"] label,
     div[data-testid="stSlider"] label {
         color: #1a2b4a !important;
@@ -198,8 +179,6 @@ st.markdown("""
         font-weight: 600 !important;
     }
     .stButton > button:hover { background: #0e3d7a !important; }
-
-    /* Expander */
     details { background: rgba(255,255,255,0.88) !important; border-radius: 12px !important; border: 1px solid rgba(100,160,230,0.25) !important; }
     summary { color: #1455a4 !important; font-weight: 600 !important; }
 </style>
@@ -208,19 +187,12 @@ st.markdown("""
 
 # ── Firebase ──────────────────────────────────────────────────────────────────
 @st.cache_resource
-def init_firebase_app():
-    if not firebase_admin._apps:
-        cred = credentials.Certificate("serviceAccountKey.json")
-        firebase_admin.initialize_app(cred, {
-            "databaseURL": st.secrets["firebase"]["database_url"]
-        })
-
-def get_ref():
-    init_firebase_app()
-    return db.reference(st.secrets["firebase"]["nodo_raiz"])
+def init_firebase_ref():
+    # La app ya fue inicializada arriba, solo retornamos la referencia
+    return db.reference("lecturas")
 
 def cargar_datos():
-    ref = get_ref()
+    ref = init_firebase_ref()
     data = ref.order_by_key().limit_to_last(500).get()
     if not data:
         return pd.DataFrame()
@@ -234,15 +206,16 @@ def cargar_datos():
     return df
 
 
-# ── Paleta científica clara ───────────────────────────────────────────────────
-COLORES  = {"temperatura": "#e05a2b", "presion": "#1455a4", "altitud": "#0e8c5a"}
-UNIDADES = {"temperatura": "°C",      "presion": "hPa",     "altitud": "m.s.n.m."}
-ICONOS   = {"temperatura": "🌡️",      "presion": "🔵",      "altitud": "⛰️"}
+# ── Paleta ────────────────────────────────────────────────────────────────────
+# Histórico: solo temperatura y presión (altitud excluida por ser valor calculado)
+COLORES  = {"temperatura": "#e05a2b", "presion": "#1455a4"}
+UNIDADES = {"temperatura": "°C",      "presion": "hPa",    "altitud": "m.s.n.m."}
+ICONOS   = {"temperatura": "🌡️",      "presion": "🔵",     "altitud": "⛰️"}
 
-PLOT_BG   = "rgba(250,253,255,0.95)"
-GRID_COL  = "#d0e4f4"
-TICK_COL  = "#a0b8d0"
-FONT_COL  = "#1a2b4a"
+PLOT_BG  = "rgba(250,253,255,0.95)"
+GRID_COL = "#d0e4f4"
+TICK_COL = "#a0b8d0"
+FONT_COL = "#1a2b4a"
 
 
 def main():
@@ -273,7 +246,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Tarjetas ──────────────────────────────────────────────────────────────
+    # ── Tarjetas — lectura más reciente (incluye altitud) ─────────────────────
     st.markdown('<div class="section-title">⚡ Lectura más reciente</div>', unsafe_allow_html=True)
 
     temp_val       = ultima["temperatura"] if pd.notnull(ultima["temperatura"]) else 0
@@ -284,11 +257,11 @@ def main():
 
     c1, c2, c3, c4, c5 = st.columns(5)
     tarjetas = [
-        (c1, "🌡️ Temperatura",    f"{temp_val:.2f}",  "°C",  "2rem"),
-        (c2, "🔵 Presión",        f"{pres_val:.2f}",  "hPa", "2rem"),
-        (c3, "⛰️ Altitud",        f"{alt_val:.1f}",   "m",   "2rem"),
-        (c4, "📶 WiFi RSSI",      f"{wifi_val}",       "dBm", "2rem"),
-        (c5, "📅 Última lectura", fecha_firebase,      "",    "1.05rem"),
+        (c1, "🌡️ Temperatura",    f"{temp_val:.2f}",  "°C",      "2rem"),
+        (c2, "🔵 Presión",        f"{pres_val:.2f}",  "hPa",     "2rem"),
+        (c3, "⛰️ Altitud",        f"{alt_val:.1f}",   "m",       "2rem"),   # ← sigue aquí
+        (c4, "📶 WiFi RSSI",      f"{wifi_val}",       "dBm",     "2rem"),
+        (c5, "📅 Última lectura", fecha_firebase,      "",        "1.05rem"),
     ]
     for col, nombre, valor, unidad, size in tarjetas:
         col.markdown(f"""
@@ -300,14 +273,14 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Gráfico histórico ─────────────────────────────────────────────────────
+    # ── Gráfico histórico — solo temperatura y presión ────────────────────────
     st.markdown('<div class="section-title">📈 Histórico de variables</div>', unsafe_allow_html=True)
 
     col_sel, col_rango = st.columns([2, 3])
     with col_sel:
         variables_sel = st.multiselect(
             "Variables a mostrar",
-            options=["temperatura", "presion", "altitud"],
+            options=["temperatura", "presion"],   # ← altitud removida aquí
             default=["temperatura", "presion"],
         )
     with col_rango:
