@@ -1,0 +1,11 @@
+# Credenciales Firebase — NUNCA subir a GitHub
+serviceAccountKey.json
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
