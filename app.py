@@ -5,6 +5,31 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import time
+import os
+
+# 1. Verificar si la app de Firebase ya está inicializada
+if not firebase_admin._apps:
+    
+    # MODO NUBE: Si encuentra los secrets de Streamlit Cloud
+    if "firebase_creds" in st.secrets:
+        firebase_creds = dict(st.secrets["firebase_creds"])
+        if "private_key" in firebase_creds:
+            firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
+        cred = credentials.Certificate(firebase_creds)
+        
+    # MODO LOCAL: Si estás en tu PC, usa el archivo JSON físico
+    elif os.path.exists("serviceAccountKey.json"):
+        cred = credentials.Certificate("serviceAccountKey.json")
+        
+    else:
+        st.error("No se encontraron credenciales de Firebase (ni en Secrets ni el archivo JSON local).")
+        st.stop()
+
+    # 2. Inicializar la base de datos (Pon tu URL real aquí)
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://estacion-metereologica-d7c0d-default-rtdb.firebaseio.com' 
+    })
+
 
 st.set_page_config(
     page_title="BIU Monitoreo - ESP32 | BMP280",
