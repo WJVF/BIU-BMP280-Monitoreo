@@ -242,7 +242,7 @@ FONT_COL = "#1a2b4a"
 @st.cache_resource
 def init_gemini():
     genai.configure(api_key=st.secrets["gemini"]["api_key"])
-    return genai.GenerativeModel("gemini-2.5-flash")
+    return genai.GenerativeModel("gemini-2.5-flash-lite")
 
 
 def construir_contexto(df, n=100):
