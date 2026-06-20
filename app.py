@@ -6,28 +6,37 @@ import plotly.graph_objects as go
 from datetime import datetime
 import time
 import os
+import google.generativeai as genai
 
-# 1. Verificar si la app de Firebase ya está inicializada
-if not firebase_admin._apps:
-    
-    # MODO NUBE: Si encuentra los secrets de Streamlit Cloud
-    if "firebase_creds" in st.secrets:
-        firebase_creds = dict(st.secrets["firebase_creds"])
-        if "private_key" in firebase_creds:
-            firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
-        cred = credentials.Certificate(firebase_creds)
-        
-    # MODO LOCAL: Si estás en tu PC, usa el archivo JSON físico
-    elif os.path.exists("serviceAccountKey.json"):
-        cred = credentials.Certificate("serviceAccountKey.json")
-        
-    else:
-        st.error("No se encontraron credenciales de Firebase (ni en Secrets ni el archivo JSON local).")
-        st.stop()
+# 1. Inicializar Firebase una sola vez por proceso (evita doble init en reruns)
+@st.cache_resource
+def inicializar_firebase():
+    if not firebase_admin._apps:
+        # MODO NUBE: Si encuentra los secrets de Streamlit Cloud
+        if "firebase_creds" in st.secrets:
+            firebase_creds = dict(st.secrets["firebase_creds"])
+            if "private_key" in firebase_creds:
+                firebase_creds["private_key"] = firebase_creds["private_key"].replace("\\n", "\n")
+            cred = credentials.Certificate(firebase_creds)
 
-    firebase_admin.initialize_app(cred, {
-        'databaseURL': 'https://estacion-metereologica-d7c0d-default-rtdb.firebaseio.com' 
-    })
+        # MODO LOCAL: Si estás en tu PC, usa el archivo JSON físico
+        elif os.path.exists("serviceAccountKey.json"):
+            cred = credentials.Certificate("serviceAccountKey.json")
+
+        else:
+            st.error("No se encontraron credenciales de Firebase (ni en Secrets ni el archivo JSON local).")
+            st.stop()
+
+        try:
+            firebase_admin.initialize_app(cred, {
+                'databaseURL': 'https://estacion-metereologica-d7c0d-default-rtdb.firebaseio.com'
+            })
+        except ValueError:
+            # Ya existe (carrera entre reruns) — no es un error real, continuamos
+            pass
+    return True
+
+inicializar_firebase()
 
 
 st.set_page_config(
@@ -170,6 +179,12 @@ st.markdown("""
         border-color: #a8c8e8 !important;
         border-radius: 8px !important;
     }
+    div[data-testid="stTextInput"] > div > div > input {
+        background-color: rgba(255,255,255,0.95) !important;
+        border-color: #a8c8e8 !important;
+        color: #1a2b4a !important;
+        border-radius: 8px !important;
+    }
     .stButton > button {
         background: #1455a4 !important;
         color: white !important;
@@ -193,11 +208,16 @@ def init_firebase_ref():
 
 def cargar_datos():
     ref = init_firebase_ref()
-    data = ref.order_by_key().limit_to_last(500).get()
+    data = ref.order_by_key().limit_to_last(35000).get()
     if not data:
         return pd.DataFrame()
     df = pd.DataFrame(list(data.values()))
+
+    # Excluir registros sin campo 'fecha' (ej. pruebas iniciales del ESP32)
+    df = df[df["fecha"].notna()].copy()
+
     df["fecha"] = pd.to_datetime(df["fecha"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+    df = df[df["fecha"].notna()]  # también descarta fechas con formato inválido
     df = df.sort_values("fecha").reset_index(drop=True)
     df["fecha_label"] = df["fecha"].dt.strftime("%d/%m %H:%M")
     for col in ["temperatura", "presion", "altitud", "wifi"]:
@@ -216,6 +236,69 @@ PLOT_BG  = "rgba(250,253,255,0.95)"
 GRID_COL = "#d0e4f4"
 TICK_COL = "#a0b8d0"
 FONT_COL = "#1a2b4a"
+
+
+# ── IA — Gemini con contexto de datos reales ─────────────────────────────────
+@st.cache_resource
+def init_gemini():
+    genai.configure(api_key=st.secrets["gemini"]["api_key"])
+    return genai.GenerativeModel("gemini-2.5-flash")
+
+
+def construir_contexto(df, n=100):
+    """Convierte los últimos N registros en un resumen de texto compacto."""
+    df_ctx = df.tail(n).copy()
+    resumen = f"""
+Datos de la estación meteorológica BIU (Bogotá, Colombia) — últimos {len(df_ctx)} registros:
+
+Período: {df_ctx['fecha'].min()} a {df_ctx['fecha'].max()}
+
+Temperatura:
+  - Actual: {df_ctx['temperatura'].iloc[-1]:.2f} °C
+  - Mínima: {df_ctx['temperatura'].min():.2f} °C
+  - Máxima: {df_ctx['temperatura'].max():.2f} °C
+  - Promedio: {df_ctx['temperatura'].mean():.2f} °C
+
+Presión atmosférica:
+  - Actual: {df_ctx['presion'].iloc[-1]:.2f} hPa
+  - Mínima: {df_ctx['presion'].min():.2f} hPa
+  - Máxima: {df_ctx['presion'].max():.2f} hPa
+  - Promedio: {df_ctx['presion'].mean():.2f} hPa
+
+Altitud:
+  - Actual: {df_ctx['altitud'].iloc[-1]:.1f} m
+  - Promedio: {df_ctx['altitud'].mean():.1f} m
+
+Señal WiFi (RSSI):
+  - Actual: {df_ctx['wifi'].iloc[-1]} dBm
+  - Mínima: {df_ctx['wifi'].min()} dBm
+  - Máxima: {df_ctx['wifi'].max()} dBm
+
+Total de registros históricos en Firebase: {len(df)}
+"""
+    return resumen
+
+
+def preguntar_ia(pregunta, contexto):
+    """Envía la pregunta + contexto a Gemini y retorna la respuesta."""
+    model = init_gemini()
+    prompt = f"""Eres un asistente experto en meteorología y análisis de datos IoT.
+Responde la pregunta del usuario basándote ÚNICAMENTE en los datos proporcionados.
+Sé breve, concreto y usa unidades correctas. Si la pregunta no se puede responder
+con estos datos, dilo claramente.
+
+DATOS DISPONIBLES:
+{contexto}
+
+PREGUNTA DEL USUARIO: {pregunta}
+
+RESPUESTA:"""
+
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"⚠️ Error al consultar la IA: {e}"
 
 
 def main():
@@ -259,7 +342,7 @@ def main():
     tarjetas = [
         (c1, "🌡️ Temperatura",    f"{temp_val:.2f}",  "°C",      "2rem"),
         (c2, "🔵 Presión",        f"{pres_val:.2f}",  "hPa",     "2rem"),
-        (c3, "⛰️ Altitud",        f"{alt_val:.1f}",   "m",       "2rem"),   # ← sigue aquí
+        (c3, "⛰️ Altitud",        f"{alt_val:.1f}",   "m",       "2rem"),
         (c4, "📶 WiFi RSSI",      f"{wifi_val}",       "dBm",     "2rem"),
         (c5, "📅 Última lectura", fecha_firebase,      "",        "1.05rem"),
     ]
@@ -280,7 +363,7 @@ def main():
     with col_sel:
         variables_sel = st.multiselect(
             "Variables a mostrar",
-            options=["temperatura", "presion"],   # ← altitud removida aquí
+            options=["temperatura", "presion"],
             default=["temperatura", "presion"],
         )
     with col_rango:
@@ -309,7 +392,7 @@ def main():
             margin=dict(l=10, r=10, t=16, b=10), height=380, hovermode="x unified",
         )
         st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.plotly_chart(fig_hist, width='stretch')
         st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("Selecciona al menos una variable.")
@@ -342,7 +425,7 @@ def main():
             paper_bgcolor="rgba(255,255,255,0.88)",
             height=260, margin=dict(l=20, r=20, t=40, b=10)
         )
-        st.plotly_chart(fig_gauge, use_container_width=True)
+        st.plotly_chart(fig_gauge, width='stretch')
 
     with col_wifi_info:
         if wifi_val >= -60:
@@ -370,8 +453,44 @@ def main():
     with st.expander("🗃️ Ver tabla de datos completa"):
         df_show = df[["fecha", "temperatura", "presion", "altitud", "wifi"]].tail(100).copy()
         df_show["fecha"] = df_show["fecha"].dt.strftime("%d/%m/%Y %H:%M:%S")
-        st.dataframe(df_show, use_container_width=True, height=300)
+        st.dataframe(df_show, width='stretch', height=300)
         st.caption(f"Mostrando últimos 100 de {len(df)} registros totales.")
+
+    # ── Chat con IA — Gemini con contexto de datos reales ─────────────────────
+    st.markdown('<div class="section-title">🤖 Pregúntale a la IA sobre tus datos</div>', unsafe_allow_html=True)
+
+    if "historial_chat" not in st.session_state:
+        st.session_state.historial_chat = []
+
+    col_chat, col_ejemplos = st.columns([3, 1])
+
+    with col_ejemplos:
+        st.caption("💡 Ejemplos de preguntas:")
+        st.caption("• ¿Cuál fue la temperatura máxima?")
+        st.caption("• ¿La presión está subiendo o bajando?")
+        st.caption("• ¿La señal WiFi es estable?")
+
+    with col_chat:
+        pregunta_usuario = st.text_input(
+            "Escribe tu pregunta sobre los datos meteorológicos:",
+            placeholder="Ej: ¿Cuál ha sido la tendencia de temperatura?",
+            key="input_pregunta"
+        )
+
+        if st.button("Preguntar 🔍") and pregunta_usuario:
+            contexto = construir_contexto(df, n=100)
+            with st.spinner("Consultando IA..."):
+                respuesta = preguntar_ia(pregunta_usuario, contexto)
+            st.session_state.historial_chat.append((pregunta_usuario, respuesta))
+
+        # Mostrar historial de la sesión actual (más reciente primero)
+        for pregunta, respuesta in reversed(st.session_state.historial_chat):
+            st.markdown(f"""
+            <div class="metric-card" style="text-align:left; margin-top:12px; padding:16px 20px;">
+                <div style="font-weight:700; color:#1455a4; margin-bottom:6px;">🙋 {pregunta}</div>
+                <div style="color:#1a2b4a; font-size:0.92rem; line-height:1.5;">🤖 {respuesta}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     st.markdown("---")
