@@ -246,35 +246,50 @@ def init_gemini():
 
 
 def construir_contexto(df, n=100):
-    """Convierte los últimos N registros en un resumen de texto compacto."""
+    """Construye un resumen compacto: estadísticas diarias de TODO el historial
+    + detalle de los últimos N registros para preguntas de corto plazo."""
+
+    # ── Rango completo disponible en Firebase ──
+    fecha_inicio = df['fecha'].min()
+    fecha_fin    = df['fecha'].max()
+    total_dias   = (fecha_fin - fecha_inicio).days
+
+    # ── Estadísticas agregadas POR DÍA (todo el historial, sin gastar tokens en cada registro) ──
+    df_diario = df.copy()
+    df_diario["dia"] = df_diario["fecha"].dt.strftime("%Y-%m-%d (%A)")
+    resumen_diario = df_diario.groupby("dia").agg(
+        temp_min=("temperatura", "min"),
+        temp_max=("temperatura", "max"),
+        temp_prom=("temperatura", "mean"),
+        presion_min=("presion", "min"),
+        presion_max=("presion", "max"),
+        presion_prom=("presion", "mean"),
+        registros=("temperatura", "count"),
+    ).round(2)
+
+    tabla_diaria = "\n".join(
+        f"  {dia}: Temp [{r.temp_min}–{r.temp_max}, prom {r.temp_prom}°C] · "
+        f"Presión [{r.presion_min}–{r.presion_max}, prom {r.presion_prom} hPa] · "
+        f"({int(r.registros)} lecturas)"
+        for dia, r in resumen_diario.iterrows()
+    )
+
+    # ── Detalle de los últimos N registros (para preguntas de "ahora" o "reciente") ──
     df_ctx = df.tail(n).copy()
+
     resumen = f"""
-Datos de la estación meteorológica BIU (Bogotá, Colombia) — últimos {len(df_ctx)} registros:
+Datos de la estación meteorológica BIU (Bogotá, Colombia).
 
-Período: {df_ctx['fecha'].min()} a {df_ctx['fecha'].max()}
+RANGO TOTAL DISPONIBLE: desde {fecha_inicio} hasta {fecha_fin} ({total_dias} días, {len(df)} registros totales).
 
-Temperatura:
-  - Actual: {df_ctx['temperatura'].iloc[-1]:.2f} °C
-  - Mínima: {df_ctx['temperatura'].min():.2f} °C
-  - Máxima: {df_ctx['temperatura'].max():.2f} °C
-  - Promedio: {df_ctx['temperatura'].mean():.2f} °C
+RESUMEN POR DÍA (todo el historial):
+{tabla_diaria}
 
-Presión atmosférica:
-  - Actual: {df_ctx['presion'].iloc[-1]:.2f} hPa
-  - Mínima: {df_ctx['presion'].min():.2f} hPa
-  - Máxima: {df_ctx['presion'].max():.2f} hPa
-  - Promedio: {df_ctx['presion'].mean():.2f} hPa
-
-Altitud:
-  - Actual: {df_ctx['altitud'].iloc[-1]:.1f} m
-  - Promedio: {df_ctx['altitud'].mean():.1f} m
-
-Señal WiFi (RSSI):
-  - Actual: {df_ctx['wifi'].iloc[-1]} dBm
-  - Mínima: {df_ctx['wifi'].min()} dBm
-  - Máxima: {df_ctx['wifi'].max()} dBm
-
-Total de registros históricos en Firebase: {len(df)}
+LECTURA MÁS RECIENTE (últimos {len(df_ctx)} registros, {df_ctx['fecha'].min()} a {df_ctx['fecha'].max()}):
+  Temperatura actual: {df_ctx['temperatura'].iloc[-1]:.2f} °C (mín {df_ctx['temperatura'].min():.2f}, máx {df_ctx['temperatura'].max():.2f}, prom {df_ctx['temperatura'].mean():.2f})
+  Presión actual: {df_ctx['presion'].iloc[-1]:.2f} hPa (mín {df_ctx['presion'].min():.2f}, máx {df_ctx['presion'].max():.2f}, prom {df_ctx['presion'].mean():.2f})
+  Altitud actual: {df_ctx['altitud'].iloc[-1]:.1f} m (prom {df_ctx['altitud'].mean():.1f})
+  WiFi RSSI actual: {df_ctx['wifi'].iloc[-1]} dBm (mín {df_ctx['wifi'].min()}, máx {df_ctx['wifi'].max()})
 """
     return resumen
 
